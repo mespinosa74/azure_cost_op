@@ -242,8 +242,9 @@ if __name__ == "__main__":
         costs = fetch_cost_by_resource(subscription)
         pricing_list = get_pricing_list(regions, skus)
         joined_data = join_data(resources, costs, pricing_list, subscription)
-        sub_data[subscription] = join_data
-    print(sub_data)
+        sub_data[subscription] = joined_data
+        
     with open('Cost_op_data.json', 'w') as f:
         json.dump(sub_data, f, indent=4)
+
 
