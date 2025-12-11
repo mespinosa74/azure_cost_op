@@ -55,8 +55,8 @@ def fetch_all_resources(subscription_id):
             region.append(each.get("location"))
         if each.get("properties", {}).get("hardwareProfile", {}).get("vmSize", "N/A") not in skus:
             skus.append(each.get("properties", {}).get("hardwareProfile", {}).get("vmSize", "N/A"))
-    with open("all_resources.json", "w") as f:
-        json.dump(formatted_results, f, indent=4)
+    # with open("all_resources.json", "w") as f:
+    #     json.dump(formatted_results, f, indent=4)
     return formatted_results, skus, region
 
 
@@ -127,8 +127,8 @@ def fetch_cost_by_resource(subscription_id):
     resp = requests.post(url, headers=headers, json=body)
     resp.raise_for_status()
     data = resp.json()
-    with open('cost_per_resource.json', 'w') as w:
-        json.dump(data, w, indent=4)
+    # with open('cost_per_resource.json', 'w') as w:
+    #     json.dump(data, w, indent=4)
     props = data.get("properties", {})
 
 
@@ -186,8 +186,8 @@ def fetch_cost_by_resource(subscription_id):
             "three_year_est": three_year_est,
             "is_new": is_new
         }
-    with open("cost_by_resource.json", "w") as f:
-        json.dump(results, f, indent=4)
+    # with open("cost_by_resource.json", "w") as f:
+    #     json.dump(results, f, indent=4)
     return results
 
 
@@ -217,8 +217,6 @@ def join_data(resources, cost_info, pricing_data, subscription):
             "price_data": pricing_data.get(r["location"], {}).get(r["vmSize"], {})
 
         })
-    with open(f'{subscription}_vm_cost_op.json', 'w') as q:
-        json.dump(joined, q, indent=4)
     return joined
 
 def get_pricing_list(regions, skus):
@@ -233,7 +231,9 @@ if __name__ == "__main__":
     """
     subscriptions_input = input(input_message)
     subscriptions = subscriptions_input.split(',')
+    output = []
     for each in subscriptions:
+        sub_data = {}
         subscription = each.strip()
         resources, skus, regions = fetch_all_resources(subscription)
         if not resources:
@@ -242,3 +242,7 @@ if __name__ == "__main__":
         costs = fetch_cost_by_resource(subscription)
         pricing_list = get_pricing_list(regions, skus)
         joined_data = join_data(resources, costs, pricing_list, subscription)
+        sub_data[subscription] = join_data
+        output.append(sub_data)
+    with open('Cost_op_data.json', 'w') as f:
+        json.dump(output, f, indent=4)
