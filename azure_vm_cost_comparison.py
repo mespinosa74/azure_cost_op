@@ -38,6 +38,8 @@ def fetch_all_resources(subscription_id):
         skip_token = data.get("$skipToken")
         if not skip_token:
             break
+    if not results:
+        return [], [], []
     skus = []
     region = []
     formatted_results = []
@@ -234,6 +236,9 @@ if __name__ == "__main__":
     for each in subscriptions:
         subscription = each.strip()
         resources, skus, regions = fetch_all_resources(subscription)
+        if not resources:
+            print(f"No resources found for subscription {subscription}. Skipping.")
+            continue
         costs = fetch_cost_by_resource(subscription)
         pricing_list = get_pricing_list(regions, skus)
         joined_data = join_data(resources, costs, pricing_list, subscription)
