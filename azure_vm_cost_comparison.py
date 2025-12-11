@@ -231,9 +231,9 @@ if __name__ == "__main__":
     """
     subscriptions_input = input(input_message)
     subscriptions = subscriptions_input.split(',')
-    output = []
+    sub_data = {}
     for each in subscriptions:
-        sub_data = {}
+        
         subscription = each.strip()
         resources, skus, regions = fetch_all_resources(subscription)
         if not resources:
@@ -243,6 +243,5 @@ if __name__ == "__main__":
         pricing_list = get_pricing_list(regions, skus)
         joined_data = join_data(resources, costs, pricing_list, subscription)
         sub_data[subscription] = join_data
-        output.append(sub_data)
     with open('Cost_op_data.json', 'w') as f:
-        json.dump(output, f, indent=4)
+        json.dump(sub_data, f, indent=4)
