@@ -250,11 +250,18 @@ def join_data(resources, cost_info, pricing_data, subscription):
                     temp_dict["price_3yr_reserved"] = prices.get("3year", "N/A")
                     break
             
-            # Also get Spot pricing if available
+            # Get Spot pricing if available
             for sku_name, prices in sku_data.items():
                 if "Spot" in sku_name:
                     temp_dict["price_spot_hourly"] = prices.get("payg", "N/A")
                     temp_dict["price_spot_monthly"] = prices.get("payg1Month", "N/A")
+                    break
+            
+            # Get Low Priority pricing if available
+            for sku_name, prices in sku_data.items():
+                if "Low Priority" in sku_name:
+                    temp_dict["price_low_priority_hourly"] = prices.get("payg", "N/A")
+                    temp_dict["price_low_priority_monthly"] = prices.get("payg1Month", "N/A")
                     break
         
         joined.append(temp_dict)
