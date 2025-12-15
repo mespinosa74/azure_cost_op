@@ -272,6 +272,356 @@ def get_pricing_list(regions, skus):
     
     return pricing_list
 
+
+
+
+def generate_html_report(data):
+    """Generate a standalone HTML report with embedded JSON data"""
+    
+    html_template = '''<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Azure VM Cost Comparison</title>
+  <style>
+    body { 
+      font-family: 'Segoe UI', Arial, sans-serif; 
+      margin: 0;
+      padding: 20px;
+      background-color: #f5f5f5;
+    }
+    .container {
+      max-width: 95%;
+      margin: 0 auto;
+      background: white;
+      padding: 30px;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    h1 {
+      color: #0078d4;
+      margin-bottom: 10px;
+      font-size: 28px;
+    }
+    .subscription-id {
+      color: #666;
+      font-size: 14px;
+      margin-bottom: 20px;
+      font-family: monospace;
+    }
+    .summary {
+      background-color: #f0f6ff;
+      padding: 15px;
+      border-radius: 6px;
+      margin-bottom: 20px;
+      display: flex;
+      gap: 30px;
+      flex-wrap: wrap;
+    }
+    .summary-item {
+      flex: 1;
+      min-width: 150px;
+    }
+    .summary-label {
+      font-size: 12px;
+      color: #666;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .summary-value {
+      font-size: 24px;
+      font-weight: bold;
+      color: #0078d4;
+      margin-top: 5px;
+    }
+    table { 
+      border-collapse: collapse; 
+      width: 100%;
+      margin-top: 20px;
+      font-size: 14px;
+    }
+    th, td { 
+      border: 1px solid #e0e0e0; 
+      padding: 12px 10px; 
+      text-align: left;
+    }
+    th { 
+      background-color: #0078d4;
+      color: white;
+      font-weight: 600;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      white-space: nowrap;
+    }
+    th.sortable {
+      cursor: pointer;
+      user-select: none;
+    }
+    th.sortable:hover {
+      background-color: #005a9e;
+    }
+    th.sortable::after {
+      content: ' ⇅';
+      opacity: 0.5;
+    }
+    tbody tr:nth-child(even) {
+      background-color: #f9f9f9;
+    }
+    tbody tr:hover {
+      background-color: #e9f5ff;
+    }
+    .vm-name {
+      font-weight: 600;
+      color: #0078d4;
+    }
+    .cost-cell {
+      text-align: right;
+      font-family: 'Courier New', monospace;
+    }
+    .new-badge {
+      background-color: #28a745;
+      color: white;
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: bold;
+      margin-left: 8px;
+    }
+    .os-badge {
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .os-linux {
+      background-color: #e8f5e9;
+      color: #2e7d32;
+    }
+    .os-windows {
+      background-color: #e3f2fd;
+      color: #1565c0;
+    }
+    .savings {
+      color: #28a745;
+      font-weight: 600;
+    }
+    .generated-date {
+      text-align: right;
+      color: #999;
+      font-size: 12px;
+      margin-top: 20px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Azure VM Cost Comparison</h1>
+    <div id="content">
+      <div style="text-align: center; padding: 40px;">Loading data...</div>
+    </div>
+  </div>
+
+  <script>
+    // Embedded JSON data
+    const jsonData = DATA_PLACEHOLDER;
+
+    function formatCurrency(value) {
+      if (value === 'N/A' || value === null || value === undefined || value === '') return 'N/A';
+      const num = parseFloat(value);
+      if (isNaN(num)) return 'N/A';
+      return '$' + num.toFixed(2);
+    }
+
+    function calculateSavings(yearlyPayg, reserved) {
+      if (yearlyPayg === 'N/A' || reserved === 'N/A') return null;
+      const payg = parseFloat(yearlyPayg);
+      const res = parseFloat(reserved);
+      if (isNaN(payg) || isNaN(res) || payg === 0) return null;
+      return ((payg - res) / payg * 100).toFixed(0);
+    }
+
+    function createSummary(vms) {
+      const totalVMs = vms.length;
+      const totalCost3M = vms.reduce((sum, vm) => sum + (vm.total_cost_3m || 0), 0);
+      const totalMonthly = vms.reduce((sum, vm) => sum + (vm.avg_monthly_cost || 0), 0);
+      const newVMs = vms.filter(vm => vm.is_new).length;
+
+      return `
+        <div class="summary">
+          <div class="summary-item">
+            <div class="summary-label">Total VMs</div>
+            <div class="summary-value">${totalVMs}</div>
+          </div>
+          <div class="summary-item">
+            <div class="summary-label">3-Month Actual Cost</div>
+            <div class="summary-value">${formatCurrency(totalCost3M)}</div>
+          </div>
+          <div class="summary-item">
+            <div class="summary-label">Avg Monthly Cost</div>
+            <div class="summary-value">${formatCurrency(totalMonthly)}</div>
+          </div>
+          <div class="summary-item">
+            <div class="summary-label">New VMs (< 90 days)</div>
+            <div class="summary-value">${newVMs}</div>
+          </div>
+        </div>
+      `;
+    }
+
+    function createTable(vms) {
+      let html = `
+        <table>
+          <thead>
+            <tr>
+              <th class="sortable" data-sort="name">VM Name</th>
+              <th class="sortable" data-sort="region">Region</th>
+              <th class="sortable" data-sort="vmSize">Size</th>
+              <th class="sortable" data-sort="osType">OS</th>
+              <th class="sortable" data-sort="total_cost_3m">3-Mo Actual</th>
+              <th class="sortable" data-sort="avg_monthly_cost">Avg/Month</th>
+              <th class="sortable" data-sort="price_payg_monthly">PAYG/Month</th>
+              <th class="sortable" data-sort="price_payg_yearly">PAYG/Year</th>
+              <th class="sortable" data-sort="price_1yr_reserved">1-Yr Reserved</th>
+              <th class="sortable" data-sort="price_3yr_reserved">3-Yr Reserved</th>
+              <th class="sortable" data-sort="price_spot_monthly">Spot/Month</th>
+              <th class="sortable" data-sort="price_low_priority_monthly">Low Priority/Month</th>
+              <th>Potential Savings</th>
+            </tr>
+          </thead>
+          <tbody>
+      `;
+
+      vms.forEach(vm => {
+        const savings1yr = calculateSavings(vm.price_payg_yearly, vm.price_1yr_reserved);
+        const savings3yr = calculateSavings(vm.price_payg_yearly, vm.price_3yr_reserved);
+        
+        html += `
+          <tr>
+            <td>
+              <span class="vm-name">${vm.name}</span>
+              ${vm.is_new ? '<span class="new-badge">NEW</span>' : ''}
+            </td>
+            <td>${vm.region}</td>
+            <td>${vm.vmSize}</td>
+            <td>
+              <span class="os-badge os-${vm.osType.toLowerCase()}">${vm.osType}</span>
+            </td>
+            <td class="cost-cell">${formatCurrency(vm.total_cost_3m)}</td>
+            <td class="cost-cell">${formatCurrency(vm.avg_monthly_cost)}</td>
+            <td class="cost-cell">${formatCurrency(vm.price_payg_monthly)}</td>
+            <td class="cost-cell">${formatCurrency(vm.price_payg_yearly)}</td>
+            <td class="cost-cell">${formatCurrency(vm.price_1yr_reserved)}</td>
+            <td class="cost-cell">${formatCurrency(vm.price_3yr_reserved)}</td>
+            <td class="cost-cell">${formatCurrency(vm.price_spot_monthly)}</td>
+            <td class="cost-cell">${formatCurrency(vm.price_low_priority_monthly)}</td>
+            <td>
+              ${savings1yr ? `<span class="savings">1yr: ${savings1yr}% off</span><br>` : ''}
+              ${savings3yr ? `<span class="savings">3yr: ${savings3yr}% off</span>` : ''}
+              ${!savings1yr && !savings3yr ? 'N/A' : ''}
+            </td>
+          </tr>
+        `;
+      });
+
+      html += `
+          </tbody>
+        </table>
+      `;
+
+      return html;
+    }
+
+    let currentSort = { column: null, ascending: true };
+
+    function sortTable(vms, column) {
+      const sorted = [...vms];
+      
+      sorted.sort((a, b) => {
+        let valA = a[column];
+        let valB = b[column];
+        
+        if (typeof valA === 'number' && typeof valB === 'number') {
+          return currentSort.ascending ? valA - valB : valB - valA;
+        }
+        
+        valA = String(valA || '').toLowerCase();
+        valB = String(valB || '').toLowerCase();
+        
+        if (valA < valB) return currentSort.ascending ? -1 : 1;
+        if (valA > valB) return currentSort.ascending ? 1 : -1;
+        return 0;
+      });
+      
+      return sorted;
+    }
+
+    function displayData(data) {
+      const content = document.getElementById('content');
+      const subscriptionIds = Object.keys(data);
+      
+      if (subscriptionIds.length === 0) {
+        content.innerHTML = '<div style="color: red;">No data found.</div>';
+        return;
+      }
+
+      let allHTML = '';
+      
+      subscriptionIds.forEach(subId => {
+        const vms = data[subId];
+        
+        allHTML += `
+          <div class="subscription-section">
+            <div class="subscription-id">Subscription: ${subId}</div>
+            ${createSummary(vms)}
+            ${createTable(vms)}
+          </div>
+        `;
+      });
+      
+      allHTML += '<div class="generated-date">Generated: TIMESTAMP_PLACEHOLDER</div>';
+      content.innerHTML = allHTML;
+      
+      document.querySelectorAll('th.sortable').forEach(th => {
+        th.addEventListener('click', () => {
+          const column = th.dataset.sort;
+          
+          if (currentSort.column === column) {
+            currentSort.ascending = !currentSort.ascending;
+          } else {
+            currentSort.column = column;
+            currentSort.ascending = true;
+          }
+          
+          subscriptionIds.forEach(subId => {
+            const sortedVMs = sortTable(data[subId], column);
+            data[subId] = sortedVMs;
+          });
+          
+          displayData(data);
+        });
+      });
+    }
+
+    window.addEventListener('DOMContentLoaded', () => {
+      displayData(jsonData);
+    });
+  </script>
+</body>
+</html>'''
+    
+    # Embed the JSON data and timestamp
+    json_str = json.dumps(data, indent=2)
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    html_content = html_template.replace('DATA_PLACEHOLDER', json_str)
+    html_content = html_content.replace('TIMESTAMP_PLACEHOLDER', timestamp)
+    
+    with open('vm_cost_report.html', 'w', encoding='utf-8') as f:
+        f.write(html_content)
+
+
+
 if __name__ == "__main__":
     input_message = """
     Input Subscription Id\n
@@ -295,4 +645,9 @@ if __name__ == "__main__":
     with open('Cost_op_data.json', 'w') as f:
         json.dump(sub_data, f, indent=4)
 
-    print("Using the cloud shell menu, download the file with the following name:\n Cost_op_data.json")
+    # Generate standalone HTML report
+    generate_html_report(sub_data)
+
+    print("Files generated:")
+    print("  - Cost_op_data.json")
+    print("  - vm_cost_report.html (standalone - just open in browser!)")
