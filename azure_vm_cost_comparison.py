@@ -204,7 +204,7 @@ def join_data(resources, cost_info, pricing_data, subscription):
             "three_year_est": 0.0,
             "is_new": True
         })
-        joined.append({
+        temp_dict = {
             "name": r["name"],
             "region": r["location"],
             "vmSize": r["vmSize"],
@@ -216,7 +216,10 @@ def join_data(resources, cost_info, pricing_data, subscription):
             "is_new": c["is_new"],
             "price_data": pricing_data.get(r["location"], {}).get(r["vmSize"], {})
 
-        })
+        }
+        for a,  b in pricing_data.get(r["location"], {}).get(r["vmSize"], {}).items():
+            temp_dict[a] = b
+        joined.append(temp_dict)
     return joined
 
 def get_pricing_list(regions, skus):
@@ -246,5 +249,4 @@ if __name__ == "__main__":
         
     with open('Cost_op_data.json', 'w') as f:
         json.dump(sub_data, f, indent=4)
-
 
