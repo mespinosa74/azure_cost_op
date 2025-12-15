@@ -224,8 +224,116 @@ def fetch_cost_by_resource(subscription_id, headers):
     return results
 
 
-def join_data(resources, cost_info, pricing_data):
-    """Combine VM resources with cost and pricing data"""
+def fetch_vm_utilization(subscription_id, resources, headers):
+    """Fetch CPU utilization metrics for VMs over the last 30 days"""
+    end_time = datetime.utcnow()
+    start_time = end_time - timedelta(days=30)
+    
+    timespan = f"{start_time.isoformat()}Z/{end_time.isoformat()}Z"
+    utilization_data = {}
+    
+    print(f"Fetching CPU utilization for {len(resources)} VMs...")
+    
+    for idx, vm in enumerate(resources, 1):
+        vm_id = vm.get('id', '')
+        vm_name = vm.get('name', 'Unknown')
+        
+        if not vm_id:
+            continue
+        
+        if idx % 10 == 0:
+            print(f"  Progress: {idx}/{len(resources)} VMs")
+        
+        url = f"https://management.azure.com{vm_id}/providers/Microsoft.Insights/metrics"
+        params = {
+            "api-version": "2023-10-01",
+            "metricnames": "Percentage CPU",
+            "timespan": timespan,
+            "interval": "PT1H",
+            "aggregation": "Average,Maximum"
+        }
+        
+        try:
+            resp = requests.get(url, headers=headers, params=params, timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
+            
+            metrics = data.get("value", [])
+            if not metrics:
+                utilization_data[vm_name.lower()] = {
+                    "avg_cpu": None,
+                    "peak_cpu": None,
+                    "recommendation": "No metrics available"
+                }
+                continue
+            
+            timeseries = metrics[0].get("timeseries", [])
+            if not timeseries or not timeseries[0].get("data"):
+                utilization_data[vm_name.lower()] = {
+                    "avg_cpu": None,
+                    "peak_cpu": None,
+                    "recommendation": "No data points"
+                }
+                continue
+            
+            data_points = timeseries[0]["data"]
+            avg_values = [d["average"] for d in data_points if d.get("average") is not None]
+            max_values = [d["maximum"] for d in data_points if d.get("maximum") is not None]
+            
+            if not avg_values:
+                utilization_data[vm_name.lower()] = {
+                    "avg_cpu": None,
+                    "peak_cpu": None,
+                    "recommendation": "No data points"
+                }
+                continue
+            
+            avg_cpu = sum(avg_values) / len(avg_values)
+            peak_cpu = max(max_values) if max_values else avg_cpu
+            
+            if avg_cpu < 10 and peak_cpu < 30:
+                recommendation = "⚠️ Very low utilization"
+            elif avg_cpu < 20 and peak_cpu < 50:
+                recommendation = "⚠️ Low utilization"
+            elif avg_cpu > 70 or peak_cpu > 90:
+                recommendation = "⚡ High utilization"
+            else:
+                recommendation = "✓ Normal"
+            
+            utilization_data[vm_name.lower()] = {
+                "avg_cpu": round(avg_cpu, 1),
+                "peak_cpu": round(peak_cpu, 1),
+                "recommendation": recommendation
+            }
+            
+        except requests.exceptions.Timeout:
+            utilization_data[vm_name.lower()] = {
+                "avg_cpu": None,
+                "peak_cpu": None,
+                "recommendation": "Timeout"
+            }
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 429:
+                print(f"  Warning: Rate limited, skipping remaining VMs")
+                break
+            utilization_data[vm_name.lower()] = {
+                "avg_cpu": None,
+                "peak_cpu": None,
+                "recommendation": "Error"
+            }
+        except Exception:
+            utilization_data[vm_name.lower()] = {
+                "avg_cpu": None,
+                "peak_cpu": None,
+                "recommendation": "Error"
+            }
+    
+    print(f"Retrieved utilization data for {len(utilization_data)} VMs")
+    return utilization_data
+
+
+def join_data(resources, cost_info, pricing_data, utilization_data=None):
+    """Combine VM resources with cost, pricing, and utilization data"""
     joined = []
     
     for r in resources:
@@ -249,6 +357,16 @@ def join_data(resources, cost_info, pricing_data):
             "three_year_est": round(c["three_year_est"], 2),
             "is_new": c["is_new"]
         }
+        
+        if utilization_data:
+            u = utilization_data.get(r['name'].lower(), {
+                "avg_cpu": None,
+                "peak_cpu": None,
+                "recommendation": "N/A"
+            })
+            temp_dict["avg_cpu"] = u.get("avg_cpu")
+            temp_dict["peak_cpu"] = u.get("peak_cpu")
+            temp_dict["utilization_status"] = u.get("recommendation", "N/A")
         
         pricing_by_location = pricing_data.get(r["location"], {})
         pricing_by_sku = pricing_by_location.get(r["vmSize"], {})
@@ -446,6 +564,30 @@ def generate_html_report(data):
       background-color: #e3f2fd;
       color: #1565c0;
     }
+    .util-warning {
+      background-color: #fff3cd;
+      color: #856404;
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .util-normal {
+      background-color: #d4edda;
+      color: #155724;
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .util-high {
+      background-color: #f8d7da;
+      color: #721c24;
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+    }
     .savings {
       color: #28a745;
       font-weight: 600;
@@ -522,6 +664,9 @@ def generate_html_report(data):
               <th class="sortable" data-sort="region">Region</th>
               <th class="sortable" data-sort="vmSize">Size</th>
               <th class="sortable" data-sort="osType">OS</th>
+              <th class="sortable" data-sort="avg_cpu">Avg CPU %</th>
+              <th class="sortable" data-sort="peak_cpu">Peak CPU %</th>
+              <th class="sortable" data-sort="utilization_status">Utilization</th>
               <th class="sortable" data-sort="total_cost_3m">3-Mo Actual</th>
               <th class="sortable" data-sort="avg_monthly_cost">Avg/Month</th>
               <th class="sortable" data-sort="price_payg_monthly">PAYG/Month</th>
@@ -540,6 +685,18 @@ def generate_html_report(data):
         const savings1yr = calculateSavings(vm.price_payg_yearly, vm.price_1yr_reserved);
         const savings3yr = calculateSavings(vm.price_payg_yearly, vm.price_3yr_reserved);
         
+        // Format CPU utilization
+        const avgCpu = vm.avg_cpu !== null && vm.avg_cpu !== undefined ? vm.avg_cpu.toFixed(1) + '%' : 'N/A';
+        const peakCpu = vm.peak_cpu !== null && vm.peak_cpu !== undefined ? vm.peak_cpu.toFixed(1) + '%' : 'N/A';
+        
+        // Determine utilization badge class
+        let utilClass = 'util-normal';
+        if (vm.utilization_status && vm.utilization_status.includes('⚠️')) {
+          utilClass = 'util-warning';
+        } else if (vm.utilization_status && vm.utilization_status.includes('⚡')) {
+          utilClass = 'util-high';
+        }
+        
         html += `
           <tr>
             <td>
@@ -550,6 +707,11 @@ def generate_html_report(data):
             <td>${vm.vmSize}</td>
             <td>
               <span class="os-badge os-${vm.osType.toLowerCase()}">${vm.osType}</span>
+            </td>
+            <td>${avgCpu}</td>
+            <td>${peakCpu}</td>
+            <td>
+              ${vm.utilization_status ? `<span class="${utilClass}">${vm.utilization_status}</span>` : 'N/A'}
             </td>
             <td class="cost-cell">${formatCurrency(vm.total_cost_3m)}</td>
             <td class="cost-cell">${formatCurrency(vm.avg_monthly_cost)}</td>
@@ -701,8 +863,9 @@ def main():
                 continue
             
             costs = fetch_cost_by_resource(subscription, headers)
+            utilization = fetch_vm_utilization(subscription, resources, headers)
             pricing_list = get_pricing_list(regions, skus)
-            joined_data = join_data(resources, costs, pricing_list)
+            joined_data = join_data(resources, costs, pricing_list, utilization)
             
             sub_data[subscription] = joined_data
             successful_subs += 1
