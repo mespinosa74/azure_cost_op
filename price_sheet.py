@@ -80,9 +80,10 @@ def format_data(data):
 def get_pricing(regions, skus):
     data = main(regions, skus)
     current_pricing = format_data(data)
-    with open('more_pricing.json', 'w') as f:
-        json.dump(current_pricing, f, indent=4)
+    # with open('more_pricing.json', 'w') as f:
+    #     json.dump(current_pricing, f, indent=4)
     return current_pricing
 
 if __name__ == "__main__":
     get_pricing()
+
