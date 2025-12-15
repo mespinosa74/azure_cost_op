@@ -224,8 +224,10 @@ def fetch_cost_by_resource(subscription_id, headers):
     return results
 
 
-def join_data(resources, cost_info, pricing_data, subscription):
+def join_data(resources, cost_info, pricing_data):
+    """Combine VM resources with cost and pricing data"""
     joined = []
+    
     for r in resources:
         c = cost_info.get(r['name'].lower(), {
             "total_cost_3m": 0.0,
@@ -235,6 +237,7 @@ def join_data(resources, cost_info, pricing_data, subscription):
             "three_year_est": 0.0,
             "is_new": True
         })
+        
         temp_dict = {
             "name": r["name"],
             "region": r["location"],
@@ -247,11 +250,9 @@ def join_data(resources, cost_info, pricing_data, subscription):
             "is_new": c["is_new"]
         }
         
-        # Flatten pricing data to make it table-friendly
         pricing_by_location = pricing_data.get(r["location"], {})
         pricing_by_sku = pricing_by_location.get(r["vmSize"], {})
         
-        # Extract the most relevant pricing: Linux series first, then Windows
         linux_series = None
         windows_series = None
         
@@ -261,19 +262,16 @@ def join_data(resources, cost_info, pricing_data, subscription):
             elif "Windows" in product_name and windows_series is None:
                 windows_series = (product_name, sku_data)
         
-        # Choose the appropriate series based on OS
         if r["osType"] == "Linux" and linux_series:
             selected_series = linux_series
         elif r["osType"] == "Windows" and windows_series:
             selected_series = windows_series
         else:
-            # Fallback to first available
             selected_series = linux_series or windows_series
         
         if selected_series:
             product_name, sku_data = selected_series
             
-            # Find standard (non-Spot, non-Low Priority) pricing
             for sku_name, prices in sku_data.items():
                 if "Spot" not in sku_name and "Low Priority" not in sku_name:
                     temp_dict["price_payg_hourly"] = prices.get("payg", "N/A")
@@ -283,14 +281,12 @@ def join_data(resources, cost_info, pricing_data, subscription):
                     temp_dict["price_3yr_reserved"] = prices.get("3year", "N/A")
                     break
             
-            # Get Spot pricing if available
             for sku_name, prices in sku_data.items():
                 if "Spot" in sku_name:
                     temp_dict["price_spot_hourly"] = prices.get("payg", "N/A")
                     temp_dict["price_spot_monthly"] = prices.get("payg1Month", "N/A")
                     break
             
-            # Get Low Priority pricing if available
             for sku_name, prices in sku_data.items():
                 if "Low Priority" in sku_name:
                     temp_dict["price_low_priority_hourly"] = prices.get("payg", "N/A")
@@ -300,8 +296,20 @@ def join_data(resources, cost_info, pricing_data, subscription):
         joined.append(temp_dict)
     return joined
 
+
 def get_pricing_list(regions, skus):
+    """Fetch pricing data for specified regions and SKUs"""
+    if not regions or not skus:
+        print("Warning: No regions or SKUs found, pricing data will be empty")
+        return {}
+    
+    print(f"Fetching pricing for {len(regions)} regions and {len(skus)} VM sizes...")
     pricing_list = price_sheet.get_pricing(regions, skus)
+    
+    if not pricing_list:
+        print("Warning: No pricing data returned")
+    else:
+        print("Pricing data retrieved successfully")
     
     return pricing_list
 
@@ -309,7 +317,10 @@ def get_pricing_list(regions, skus):
 
 
 def generate_html_report(data):
-    """Generate a standalone HTML report with embedded JSON data"""
+    """Generate standalone HTML report with embedded JSON data"""
+    if not data:
+        print("Warning: No data to generate report")
+        return
     
     html_template = '''<!DOCTYPE html>
 <html>
@@ -643,44 +654,86 @@ def generate_html_report(data):
 </body>
 </html>'''
     
-    # Embed the JSON data and timestamp
-    json_str = json.dumps(data, indent=2)
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    
-    html_content = html_template.replace('DATA_PLACEHOLDER', json_str)
-    html_content = html_content.replace('TIMESTAMP_PLACEHOLDER', timestamp)
-    
-    with open('vm_cost_report.html', 'w', encoding='utf-8') as f:
-        f.write(html_content)
+    try:
+        json_str = json.dumps(data, indent=2)
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        html_content = html_template.replace('DATA_PLACEHOLDER', json_str)
+        html_content = html_content.replace('TIMESTAMP_PLACEHOLDER', timestamp)
+        
+        with open('vm_cost_report.html', 'w', encoding='utf-8') as f:
+            f.write(html_content)
+        
+        print("Generated: vm_cost_report.html")
+    except Exception as e:
+        print(f"Error generating HTML report: {e}")
 
+
+def main():
+    """Main execution function"""
+    print("Azure VM Cost Comparison Tool")
+    print("=" * 50)
+    
+    headers = initialize_azure_credentials()
+    
+    input_message = "\nEnter Subscription ID(s) (comma-separated for multiple): "
+    subscriptions_input = input(input_message).strip()
+    
+    if not subscriptions_input:
+        print("Error: No subscription ID provided")
+        sys.exit(1)
+    
+    subscriptions = [s.strip() for s in subscriptions_input.split(',')]
+    sub_data = {}
+    successful_subs = 0
+    
+    print(f"\nProcessing {len(subscriptions)} subscription(s)...\n")
+    
+    for idx, subscription in enumerate(subscriptions, 1):
+        print(f"\n[{idx}/{len(subscriptions)}] Processing subscription: {subscription}")
+        print("-" * 50)
+        
+        try:
+            resources, skus, regions = fetch_all_resources(subscription, headers)
+            
+            if not resources:
+                print(f"Skipping subscription {subscription} - no VMs found\n")
+                continue
+            
+            costs = fetch_cost_by_resource(subscription, headers)
+            pricing_list = get_pricing_list(regions, skus)
+            joined_data = join_data(resources, costs, pricing_list)
+            
+            sub_data[subscription] = joined_data
+            successful_subs += 1
+            print(f"Successfully processed subscription {subscription}")
+            
+        except Exception as e:
+            print(f"Error processing subscription {subscription}: {e}")
+            continue
+    
+    if not sub_data:
+        print("\nError: No data collected from any subscription")
+        sys.exit(1)
+    
+    print(f"\n{'=' * 50}")
+    print(f"Successfully processed {successful_subs} of {len(subscriptions)} subscription(s)")
+    print(f"{'=' * 50}\n")
+    
+    try:
+        generate_html_report(sub_data)
+        print("\nSuccess! Open 'vm_cost_report.html' in your browser to view results")
+    except Exception as e:
+        print(f"Error generating final report: {e}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
-    input_message = """
-    Input Subscription Id\n
-    If entering more than one ensure that they are comma separated or the script will fail.\n
-    """
-    subscriptions_input = input(input_message)
-    subscriptions = subscriptions_input.split(',')
-    sub_data = {}
-    for each in subscriptions:
-        
-        subscription = each.strip()
-        resources, skus, regions = fetch_all_resources(subscription)
-        if not resources:
-            print(f"No resources found for subscription {subscription}. Skipping.")
-            continue
-        costs = fetch_cost_by_resource(subscription)
-        pricing_list = get_pricing_list(regions, skus)
-        joined_data = join_data(resources, costs, pricing_list, subscription)
-        sub_data[subscription] = joined_data
-        
-    # with open('Cost_op_data.json', 'w') as f:
-    #     json.dump(sub_data, f, indent=4)
-
-    # Generate standalone HTML report
-    generate_html_report(sub_data)
-
-    print("Files generated:")
-    # print("  - Cost_op_data.json")
-    print("  - vm_cost_report.html (standalone - just open in browser!)")
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n\nOperation cancelled by user")
+        sys.exit(0)
+    except Exception as e:
+        print(f"\nUnexpected error: {e}")
+        sys.exit(1)
