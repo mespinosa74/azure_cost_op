@@ -213,9 +213,7 @@ def join_data(resources, cost_info, pricing_data, subscription):
             "avg_monthly_cost": c["avg_monthly_cost"],
             "one_year_est": c["one_year_est"],
             "three_year_est": c["three_year_est"],
-            "is_new": c["is_new"],
-            "price_data": pricing_data.get(r["location"], {}).get(r["vmSize"], {})
-
+            "is_new": c["is_new"]
         }
         for a,  b in pricing_data.get(r["location"], {}).get(r["vmSize"], {}).items():
             temp_dict[a] = b
