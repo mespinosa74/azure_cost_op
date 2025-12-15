@@ -5,7 +5,7 @@ import json
 import sys
 import re
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import price_sheet
 
 
@@ -226,7 +226,7 @@ def fetch_cost_by_resource(subscription_id, headers):
 
 def fetch_vm_utilization(subscription_id, resources, headers):
     """Fetch CPU utilization metrics for VMs over the last 30 days"""
-    end_time = datetime.utcnow()
+    end_time = datetime.now(timezone.utc)
     start_time = end_time - timedelta(days=30)
     
     timespan = f"{start_time.isoformat()}Z/{end_time.isoformat()}Z"
@@ -496,10 +496,13 @@ def generate_html_report(data):
       color: #0078d4;
       margin-top: 5px;
     }
+    .table-wrapper {
+      overflow-x: auto;
+      margin-top: 20px;
+    }
     table { 
       border-collapse: collapse; 
       width: 100%;
-      margin-top: 20px;
       font-size: 14px;
     }
     th, td { 
@@ -657,6 +660,7 @@ def generate_html_report(data):
 
     function createTable(vms) {
       let html = `
+        <div class="table-wrapper">
         <table>
           <thead>
             <tr>
@@ -733,6 +737,7 @@ def generate_html_report(data):
       html += `
           </tbody>
         </table>
+        </div>
       `;
 
       return html;
