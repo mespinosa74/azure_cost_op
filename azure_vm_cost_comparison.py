@@ -229,7 +229,8 @@ def fetch_vm_utilization(subscription_id, resources, headers):
     end_time = datetime.now(timezone.utc)
     start_time = end_time - timedelta(days=30)
     
-    timespan = f"{start_time.isoformat()}Z/{end_time.isoformat()}Z"
+    # Format datetime for Azure Monitor API (ISO 8601 format)
+    timespan = f"{start_time.strftime('%Y-%m-%dT%H:%M:%SZ')}/{end_time.strftime('%Y-%m-%dT%H:%M:%SZ')}"
     utilization_data = {}
     
     print(f"Fetching CPU utilization for {len(resources)} VMs...")
@@ -321,7 +322,7 @@ def fetch_vm_utilization(subscription_id, resources, headers):
                 "peak_cpu": None,
                 "recommendation": "Error"
             }
-        except Exception:
+        except Exception as e:
             utilization_data[vm_name.lower()] = {
                 "avg_cpu": None,
                 "peak_cpu": None,
