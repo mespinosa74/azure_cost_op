@@ -193,8 +193,6 @@ def fetch_cost_by_resource(subscription_id):
 
 def join_data(resources, cost_info, pricing_data, subscription):
     joined = []
-    # with open('VM_Pricing_v2.json', 'r') as f:
-    #     pricing_data = json.load(f)
     for r in resources:
         c = cost_info.get(r['name'].lower(), {
             "total_cost_3m": 0.0,
@@ -209,14 +207,56 @@ def join_data(resources, cost_info, pricing_data, subscription):
             "region": r["location"],
             "vmSize": r["vmSize"],
             "osType": r["osType"],
-            "total_cost_3m": c["total_cost_3m"],
-            "avg_monthly_cost": c["avg_monthly_cost"],
-            "one_year_est": c["one_year_est"],
-            "three_year_est": c["three_year_est"],
+            "total_cost_3m": round(c["total_cost_3m"], 2),
+            "avg_monthly_cost": round(c["avg_monthly_cost"], 2),
+            "one_year_est": round(c["one_year_est"], 2),
+            "three_year_est": round(c["three_year_est"], 2),
             "is_new": c["is_new"]
         }
-        for a,  b in pricing_data.get(r["location"], {}).get(r["vmSize"], {}).items():
-            temp_dict[a] = b
+        
+        # Flatten pricing data to make it table-friendly
+        pricing_by_location = pricing_data.get(r["location"], {})
+        pricing_by_sku = pricing_by_location.get(r["vmSize"], {})
+        
+        # Extract the most relevant pricing: Linux series first, then Windows
+        linux_series = None
+        windows_series = None
+        
+        for product_name, sku_data in pricing_by_sku.items():
+            if "Windows" not in product_name and linux_series is None:
+                linux_series = (product_name, sku_data)
+            elif "Windows" in product_name and windows_series is None:
+                windows_series = (product_name, sku_data)
+        
+        # Choose the appropriate series based on OS
+        if r["osType"] == "Linux" and linux_series:
+            selected_series = linux_series
+        elif r["osType"] == "Windows" and windows_series:
+            selected_series = windows_series
+        else:
+            # Fallback to first available
+            selected_series = linux_series or windows_series
+        
+        if selected_series:
+            product_name, sku_data = selected_series
+            
+            # Find standard (non-Spot, non-Low Priority) pricing
+            for sku_name, prices in sku_data.items():
+                if "Spot" not in sku_name and "Low Priority" not in sku_name:
+                    temp_dict["price_payg_hourly"] = prices.get("payg", "N/A")
+                    temp_dict["price_payg_monthly"] = prices.get("payg1Month", "N/A")
+                    temp_dict["price_payg_yearly"] = prices.get("payg1Year", "N/A")
+                    temp_dict["price_1yr_reserved"] = prices.get("1year", "N/A")
+                    temp_dict["price_3yr_reserved"] = prices.get("3year", "N/A")
+                    break
+            
+            # Also get Spot pricing if available
+            for sku_name, prices in sku_data.items():
+                if "Spot" in sku_name:
+                    temp_dict["price_spot_hourly"] = prices.get("payg", "N/A")
+                    temp_dict["price_spot_monthly"] = prices.get("payg1Month", "N/A")
+                    break
+        
         joined.append(temp_dict)
     return joined
 
