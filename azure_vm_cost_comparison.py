@@ -355,18 +355,18 @@ def join_data(resources, cost_info, pricing_data, utilization_data=None):
             "avg_monthly_cost": round(c["avg_monthly_cost"], 2),
             "one_year_est": round(c["one_year_est"], 2),
             "three_year_est": round(c["three_year_est"], 2),
-            "is_new": c["is_new"]
+            "is_new": c["is_new"],
+            "avg_cpu": None,
+            "peak_cpu": None,
+            "utilization_status": "N/A"
         }
         
         if utilization_data:
-            u = utilization_data.get(r['name'].lower(), {
-                "avg_cpu": None,
-                "peak_cpu": None,
-                "recommendation": "N/A"
-            })
-            temp_dict["avg_cpu"] = u.get("avg_cpu")
-            temp_dict["peak_cpu"] = u.get("peak_cpu")
-            temp_dict["utilization_status"] = u.get("recommendation", "N/A")
+            u = utilization_data.get(r['name'].lower(), {})
+            if u:
+                temp_dict["avg_cpu"] = u.get("avg_cpu")
+                temp_dict["peak_cpu"] = u.get("peak_cpu")
+                temp_dict["utilization_status"] = u.get("recommendation", "N/A")
         
         pricing_by_location = pricing_data.get(r["location"], {})
         pricing_by_sku = pricing_by_location.get(r["vmSize"], {})
