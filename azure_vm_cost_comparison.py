@@ -250,3 +250,4 @@ if __name__ == "__main__":
     with open('Cost_op_data.json', 'w') as f:
         json.dump(sub_data, f, indent=4)
 
+    print("Using the cloud shell menu, download the file with the following name:\n Cost_op_data.json")
