@@ -1,105 +1,125 @@
 from azure.identity import DefaultAzureCredential
-import requests, json
+from azure.core.exceptions import AzureError
+import requests
+import json
+import sys
+import re
 from collections import defaultdict
 from datetime import datetime, timedelta
 import price_sheet
 
 
-credential = DefaultAzureCredential()
-token = credential.get_token("https://management.azure.com/.default")
-access_token = token.token
-headers = {
-    "Authorization": f"Bearer {access_token}",
-    "Content-Type": "application/json"
-}
+def initialize_azure_credentials():
+    """Initialize Azure credentials with error handling"""
+    try:
+        credential = DefaultAzureCredential()
+        token = credential.get_token("https://management.azure.com/.default")
+        headers = {
+            "Authorization": f"Bearer {token.token}",
+            "Content-Type": "application/json"
+        }
+        return headers
+    except Exception as e:
+        print(f"Error: Failed to authenticate with Azure")
+        print(f"Details: {e}")
+        print("\nPlease ensure you are logged in via 'az login' or have valid credentials configured")
+        sys.exit(1)
 
 
-def fetch_all_resources(subscription_id):
+def validate_subscription_id(subscription_id):
+    """Validate subscription ID format (GUID)"""
+    guid_pattern = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.IGNORECASE)
+    return bool(guid_pattern.match(subscription_id))
+
+
+def fetch_all_resources(subscription_id, headers):
+    """Fetch all VMs from a subscription"""
+    if not validate_subscription_id(subscription_id):
+        print(f"Warning: '{subscription_id}' does not appear to be a valid subscription ID")
+        return [], [], []
+    
     url = f"https://management.azure.com/subscriptions/{subscription_id}/providers/Microsoft.Compute/virtualMachines?api-version=2025-04-01"
-
-
     results = []
     skip_token = None
+    
+    print(f"Fetching VMs for subscription {subscription_id}...")
 
-    while True:
-        body = {}
-        if skip_token:
-            body["$skipToken"] = skip_token
-            resp = requests.post(url, headers=headers, json=body)
+    try:
+        while True:
+            body = {}
+            if skip_token:
+                body["$skipToken"] = skip_token
+                resp = requests.post(url, headers=headers, json=body, timeout=60)
+            else:
+                resp = requests.get(url, headers=headers, timeout=60)
+            
+            resp.raise_for_status()
+            data = resp.json()
+            results.extend(data.get("value", []))
+
+            skip_token = data.get("$skipToken")
+            if not skip_token:
+                break
+    except requests.exceptions.Timeout:
+        print(f"Error: Request timed out while fetching VMs for subscription {subscription_id}")
+        return [], [], []
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 403:
+            print(f"Error: Access denied to subscription {subscription_id}. Check your permissions.")
+        elif e.response.status_code == 404:
+            print(f"Error: Subscription {subscription_id} not found")
         else:
-            resp = requests.get(url, headers=headers)
-        resp.raise_for_status()
-        data = resp.json()
-
-
-        results.extend(data.get("value", []))
-
-
-        skip_token = data.get("$skipToken")
-        if not skip_token:
-            break
+            print(f"Error: HTTP {e.response.status_code} while fetching VMs: {e}")
+        return [], [], []
+    except requests.exceptions.RequestException as e:
+        print(f"Error: Network error while fetching VMs: {e}")
+        return [], [], []
+    
     if not results:
         return [], [], []
+    
     skus = []
-    region = []
+    regions = []
     formatted_results = []
-    for each in results:
-        formatted_results.append({
-            "id": each["id"],
-            "name": each["name"],
-            "location": each.get("location", "N/A"),
-            "vmSize": each.get("properties", {}).get("hardwareProfile", {}).get("vmSize", "N/A"),
-            "osType": each.get("properties", {}).get("storageProfile", {}).get("osDisk", {}).get("osType", "N/A")
-        })
-        if each.get("location") not in region:
-            region.append(each.get("location"))
-        if each.get("properties", {}).get("hardwareProfile", {}).get("vmSize", "N/A") not in skus:
-            skus.append(each.get("properties", {}).get("hardwareProfile", {}).get("vmSize", "N/A"))
-    # with open("all_resources.json", "w") as f:
-    #     json.dump(formatted_results, f, indent=4)
-    return formatted_results, skus, region
+    
+    for vm in results:
+        try:
+            location = vm.get("location", "N/A")
+            vm_size = vm.get("properties", {}).get("hardwareProfile", {}).get("vmSize", "N/A")
+            os_type = vm.get("properties", {}).get("storageProfile", {}).get("osDisk", {}).get("osType", "N/A")
+            
+            formatted_results.append({
+                "id": vm.get("id", ""),
+                "name": vm.get("name", "Unknown"),
+                "location": location,
+                "vmSize": vm_size,
+                "osType": os_type
+            })
+            
+            if location not in regions and location != "N/A":
+                regions.append(location)
+            if vm_size not in skus and vm_size != "N/A":
+                skus.append(vm_size)
+        except (KeyError, TypeError) as e:
+            print(f"Warning: Skipping malformed VM data: {e}")
+            continue
+    
+    print(f"Found {len(formatted_results)} VMs")
+    return formatted_results, skus, regions
 
 
-def fetch_cost_by_resource(subscription_id):
-    """
-    start_date, end_date: 'YYYY-MM-DD' strings
-    Assumes roughly 3 months between start and end.
-    Returns: dict[resourceId] = {
-        'total_cost_3m': float,
-        'active_days': int,
-        'avg_monthly_cost': float,
-        'is_new': bool,
-    }
-    """
+def fetch_cost_by_resource(subscription_id, headers):
+    """Fetch cost data for VMs over the last 90 days"""
     start_date = (datetime.now() - timedelta(days=90)).isoformat()
     end_date = datetime.now().isoformat()
-    url = (f"https://management.azure.com/subscriptions/{subscription_id}/providers/Microsoft.CostManagement/query?api-version=2025-03-01")
-
-    # body = {
-    #     "type": "Usage",
-    #     "timeframe": "Custom",
-    #     "timePeriod": {
-    #         "from": start_date,
-    #         "to": end_date
-    #     },
-    #     "dataset": {
-    #         "granularity": "Daily",
-    #         "aggregation": {
-    #             "totalCost": {"name": "Cost", "function": "Sum"}
-    #         },
-    #         "grouping": [
-    #             {"type": "Dimension", "name": "ResourceId"}
-    #         ]
-
-    #     }
-    # }
+    url = f"https://management.azure.com/subscriptions/{subscription_id}/providers/Microsoft.CostManagement/query?api-version=2025-03-01"
 
     body = {
         "type": "Usage",
         "timeframe": "Custom",
         "timePeriod": {
             "from": start_date,
-            "to":   end_date
+            "to": end_date
         },
         "dataset": {
             "granularity": "Daily",
@@ -113,57 +133,71 @@ def fetch_cost_by_resource(subscription_id):
                 "dimensions": {
                     "name": "ResourceType",
                     "operator": "In",
-                    "values": [ "microsoft.compute/virtualmachines" ]
+                    "values": ["microsoft.compute/virtualmachines"]
                 }
             }
-
         }
     }
 
-
     stats = defaultdict(lambda: {"total_cost_3m": 0.0, "active_days": 0})
+    
+    print(f"Fetching cost data for subscription {subscription_id}...")
 
- 
-    resp = requests.post(url, headers=headers, json=body)
-    resp.raise_for_status()
-    data = resp.json()
-    # with open('cost_per_resource.json', 'w') as w:
-    #     json.dump(data, w, indent=4)
-    props = data.get("properties", {})
-
-
-    def process_rows(rows):
-        for row in rows:
-            full_id = row[2]
-            rid = full_id.split('/')[-1]
-            cost_raw = row[0]
-
-
-            try:
-                cost = float(cost_raw)
-            except (TypeError, ValueError):
-                cost = 0.0
-
-            if rid is None:
-                continue
-
-            stats[rid]["total_cost_3m"] += cost
-
-            if cost > 0:
-                stats[rid]["active_days"] += 1
-
-    process_rows(props.get("rows", []))
-
-
-    next_link = props.get("nextLink")
-    while next_link:
-        resp = requests.get(next_link, headers=headers)
+    try:
+        resp = requests.post(url, headers=headers, json=body, timeout=60)
         resp.raise_for_status()
         data = resp.json()
         props = data.get("properties", {})
-        process_rows(props.get("rows", []))
-        next_link = props.get("nextLink")
+    except requests.exceptions.Timeout:
+        print("Warning: Cost data request timed out, continuing with zero costs")
+        return {}
+    except requests.exceptions.HTTPError as e:
+        print(f"Warning: Could not fetch cost data (HTTP {e.response.status_code}), continuing with zero costs")
+        return {}
+    except requests.exceptions.RequestException as e:
+        print(f"Warning: Network error fetching cost data: {e}, continuing with zero costs")
+        return {}
 
+    def process_rows(rows):
+        """Process cost data rows"""
+        for row in rows:
+            try:
+                if len(row) < 3:
+                    continue
+                
+                full_id = row[2]
+                rid = full_id.split('/')[-1].lower()
+                cost_raw = row[0]
+
+                try:
+                    cost = float(cost_raw)
+                except (TypeError, ValueError):
+                    cost = 0.0
+
+                stats[rid]["total_cost_3m"] += cost
+                if cost > 0:
+                    stats[rid]["active_days"] += 1
+            except (IndexError, KeyError, TypeError):
+                continue
+
+    process_rows(props.get("rows", []))
+
+    next_link = props.get("nextLink")
+    page_count = 1
+    max_pages = 100
+    
+    while next_link and page_count < max_pages:
+        try:
+            resp = requests.get(next_link, headers=headers, timeout=60)
+            resp.raise_for_status()
+            data = resp.json()
+            props = data.get("properties", {})
+            process_rows(props.get("rows", []))
+            next_link = props.get("nextLink")
+            page_count += 1
+        except requests.exceptions.RequestException:
+            print("Warning: Error fetching additional cost data pages")
+            break
 
     FULL_WINDOW_DAYS = 90
     MONTHS_IN_WINDOW = 3.0
@@ -172,7 +206,6 @@ def fetch_cost_by_resource(subscription_id):
     for rid, s in stats.items():
         total = s["total_cost_3m"]
         active_days = s["active_days"]
-
         avg_monthly = total / MONTHS_IN_WINDOW
         one_year_est = avg_monthly * 12
         three_year_est = avg_monthly * 36
@@ -186,8 +219,8 @@ def fetch_cost_by_resource(subscription_id):
             "three_year_est": three_year_est,
             "is_new": is_new
         }
-    # with open("cost_by_resource.json", "w") as f:
-    #     json.dump(results, f, indent=4)
+    
+    print(f"Retrieved cost data for {len(results)} resources")
     return results
 
 
@@ -642,12 +675,12 @@ if __name__ == "__main__":
         joined_data = join_data(resources, costs, pricing_list, subscription)
         sub_data[subscription] = joined_data
         
-    with open('Cost_op_data.json', 'w') as f:
-        json.dump(sub_data, f, indent=4)
+    # with open('Cost_op_data.json', 'w') as f:
+    #     json.dump(sub_data, f, indent=4)
 
     # Generate standalone HTML report
     generate_html_report(sub_data)
 
     print("Files generated:")
-    print("  - Cost_op_data.json")
+    # print("  - Cost_op_data.json")
     print("  - vm_cost_report.html (standalone - just open in browser!)")
