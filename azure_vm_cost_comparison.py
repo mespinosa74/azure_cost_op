@@ -891,6 +891,8 @@ def main():
     
     try:
         generate_html_report(sub_data)
+        with open('output.json', 'w') as f:
+            json.dump(sub_data, f, indent=4)
         print("\nSuccess! Open 'vm_cost_report.html' in your browser to view results")
     except Exception as e:
         print(f"Error generating final report: {e}")
