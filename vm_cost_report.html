@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Azure VM Cost Comparison</title>
+  <style>
+    body { 
+      font-family: 'Segoe UI', Arial, sans-serif; 
+      margin: 0;
+      padding: 20px;
+      background-color: #f5f5f5;
+    }
+    .container {
+      max-width: 95%;
+      margin: 0 auto;
+      background: white;
+      padding: 30px;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    h1 {
+      color: #0078d4;
+      margin-bottom: 10px;
+      font-size: 28px;
+    }
+    .subscription-id {
+      color: #666;
+      font-size: 14px;
+      margin-bottom: 20px;
+      font-family: monospace;
+    }
+    .summary {
+      background-color: #f0f6ff;
+      padding: 15px;
+      border-radius: 6px;
+      margin-bottom: 20px;
+      display: flex;
+      gap: 30px;
+      flex-wrap: wrap;
+    }
+    .summary-item {
+      flex: 1;
+      min-width: 150px;
+    }
+    .summary-label {
+      font-size: 12px;
+      color: #666;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .summary-value {
+      font-size: 24px;
+      font-weight: bold;
+      color: #0078d4;
+      margin-top: 5px;
+    }
+    .table-wrapper {
+      overflow-x: auto;
+      margin-top: 20px;
+    }
+    table { 
+      border-collapse: collapse; 
+      width: 100%;
+      font-size: 14px;
+    }
+    th, td { 
+      border: 1px solid #e0e0e0; 
+      padding: 12px 10px; 
+      text-align: left;
+    }
+    th { 
+      background-color: #0078d4;
+      color: white;
+      font-weight: 600;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      white-space: nowrap;
+    }
+    th.sortable {
+      cursor: pointer;
+      user-select: none;
+    }
+    th.sortable:hover {
+      background-color: #005a9e;
+    }
+    th.sortable::after {
+      content: ' ⇅';
+      opacity: 0.5;
+    }
+    tbody tr:nth-child(even) {
+      background-color: #f9f9f9;
+    }
+    tbody tr:hover {
+      background-color: #e9f5ff;
+    }
+    .vm-name {
+      font-weight: 600;
+      color: #0078d4;
+    }
+    .cost-cell {
+      text-align: right;
+      font-family: 'Courier New', monospace;
+    }
+    .new-badge {
+      background-color: #28a745;
+      color: white;
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: bold;
+      margin-left: 8px;
+    }
+    .os-badge {
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .os-linux {
+      background-color: #e8f5e9;
+      color: #2e7d32;
+    }
+    .os-windows {
+      background-color: #e3f2fd;
+      color: #1565c0;
+    }
+    .util-warning {
+      background-color: #fff3cd;
+      color: #856404;
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .util-normal {
+      background-color: #d4edda;
+      color: #155724;
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .util-high {
+      background-color: #f8d7da;
+      color: #721c24;
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .savings {
+      color: #28a745;
+      font-weight: 600;
+    }
+    .generated-date {
+      text-align: right;
+      color: #999;
+      font-size: 12px;
+      margin-top: 20px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Azure VM Cost Comparison</h1>
+    <div id="content">
+      <div style="text-align: center; padding: 40px;">Loading data...</div>
+    </div>
+  </div>
+
+  <script>
+    // Embedded JSON data
+    const jsonData = {
+  "c26f310b-7e32-4046-b28b-c7edb4803ff7": [
+    {
+      "name": "ahb-test",
+      "region": "eastus2",
+      "vmSize": "Standard_D2s_v3",
+      "osType": "Windows",
+      "total_cost_3m": 0.0,
+      "avg_monthly_cost": 0.0,
+      "one_year_est": 0.0,
+      "three_year_est": 0.0,
+      "is_new": true,
+      "avg_cpu": 16.3,
+      "peak_cpu": 97.2,
+      "utilization_status": "\u26a1 High utilization",
+      "license_included": "No",
+      "price_payg_hourly": 0.096,
+      "price_payg_monthly": "71.42",
+      "price_payg_yearly": "840.96",
+      "price_1yr_reserved": 502.0,
+      "price_3yr_reserved": 968.0,
+      "price_1yr_reserved_monthly": "41.83",
+      "price_3yr_reserved_monthly": "26.89",
+      "price_spot_hourly": 0.028541,
+      "price_spot_monthly": "21.23",
+      "price_low_priority_hourly": 0.019,
+      "price_low_priority_monthly": "14.14"
+    },
+    {
+      "name": "anotherTest",
+      "region": "eastus2",
+      "vmSize": "Standard_D2s_v3",
+      "osType": "Windows",
+      "total_cost_3m": 0.0,
+      "avg_monthly_cost": 0.0,
+      "one_year_est": 0.0,
+      "three_year_est": 0.0,
+      "is_new": true,
+      "avg_cpu": 78.9,
+      "peak_cpu": 98.8,
+      "utilization_status": "\u26a1 High utilization",
+      "license_included": "Yes",
+      "price_payg_hourly": 0.188,
+      "price_payg_monthly": "139.87",
+      "price_payg_yearly": "1646.88",
+      "price_1yr_reserved": "N/A",
+      "price_3yr_reserved": "N/A",
+      "price_1yr_reserved_monthly": "N/A",
+      "price_3yr_reserved_monthly": "N/A",
+      "price_spot_hourly": 0.055892,
+      "price_spot_monthly": "41.58",
+      "price_low_priority_hourly": 0.075,
+      "price_low_priority_monthly": "55.80"
+    },
+    {
+      "name": "test-vm-2",
+      "region": "eastus2",
+      "vmSize": "Standard_D2s_v3",
+      "osType": "Linux",
+      "total_cost_3m": 0.02,
+      "avg_monthly_cost": 0.01,
+      "one_year_est": 0.1,
+      "three_year_est": 0.29,
+      "is_new": true,
+      "avg_cpu": 0.7,
+      "peak_cpu": 13.4,
+      "utilization_status": "\u26a0\ufe0f Very low utilization",
+      "license_included": "No",
+      "price_payg_hourly": 0.096,
+      "price_payg_monthly": "71.42",
+      "price_payg_yearly": "840.96",
+      "price_1yr_reserved": 502.0,
+      "price_3yr_reserved": 968.0,
+      "price_1yr_reserved_monthly": "41.83",
+      "price_3yr_reserved_monthly": "26.89",
+      "price_spot_hourly": 0.028541,
+      "price_spot_monthly": "21.23",
+      "price_low_priority_hourly": 0.019,
+      "price_low_priority_monthly": "14.14"
+    },
+    {
+      "name": "Test-vm",
+      "region": "centralus",
+      "vmSize": "Standard_D2s_v3",
+      "osType": "Linux",
+      "total_cost_3m": 0.13,
+      "avg_monthly_cost": 0.04,
+      "one_year_est": 0.52,
+      "three_year_est": 1.56,
+      "is_new": true,
+      "avg_cpu": 0.8,
+      "peak_cpu": 47.3,
+      "utilization_status": "\u26a0\ufe0f Low utilization",
+      "license_included": "No",
+      "price_payg_hourly": 0.11,
+      "price_payg_monthly": "81.84",
+      "price_payg_yearly": "963.60",
+      "price_1yr_reserved": 608.0,
+      "price_3yr_reserved": 1185.0,
+      "price_1yr_reserved_monthly": "50.67",
+      "price_3yr_reserved_monthly": "32.92",
+      "price_spot_hourly": 0.017886,
+      "price_spot_monthly": "13.31",
+      "price_low_priority_hourly": 0.022,
+      "price_low_priority_monthly": "16.37"
+    },
+    {
+      "name": "test-vm-3",
+      "region": "westus2",
+      "vmSize": "Standard_D2ls_v5",
+      "osType": "Linux",
+      "total_cost_3m": 0.02,
+      "avg_monthly_cost": 0.01,
+      "one_year_est": 0.07,
+      "three_year_est": 0.22,
+      "is_new": true,
+      "avg_cpu": 0.1,
+      "peak_cpu": 0.1,
+      "utilization_status": "\u26a0\ufe0f Very low utilization",
+      "license_included": "No",
+      "price_payg_hourly": 0.085,
+      "price_payg_monthly": "63.24",
+      "price_payg_yearly": "744.60",
+      "price_1yr_reserved": 439.0,
+      "price_3yr_reserved": 849.0,
+      "price_1yr_reserved_monthly": "36.58",
+      "price_3yr_reserved_monthly": "23.58",
+      "price_spot_hourly": 0.022006,
+      "price_spot_monthly": "16.37",
+      "price_low_priority_hourly": 0.017,
+      "price_low_priority_monthly": "12.65"
+    }
+  ]
+};
+
+    function formatCurrency(value) {
+      if (value === 'N/A' || value === null || value === undefined || value === '') return 'N/A';
+      const num = parseFloat(value);
+      if (isNaN(num)) return 'N/A';
+      return '$' + num.toFixed(2);
+    }
+
+    function calculateSavings(yearlyPayg, reserved) {
+      if (yearlyPayg === 'N/A' || reserved === 'N/A') return null;
+      const payg = parseFloat(yearlyPayg);
+      const res = parseFloat(reserved);
+      if (isNaN(payg) || isNaN(res) || payg === 0) return null;
+      return ((payg - res) / payg * 100).toFixed(0);
+    }
+
+    function createSummary(vms) {
+      const totalVMs = vms.length;
+      const totalCost3M = vms.reduce((sum, vm) => sum + (vm.total_cost_3m || 0), 0);
+      const totalMonthly = vms.reduce((sum, vm) => sum + (vm.avg_monthly_cost || 0), 0);
+      const newVMs = vms.filter(vm => vm.is_new).length;
+
+      return `
+        <div class="summary">
+          <div class="summary-item">
+            <div class="summary-label">Total VMs</div>
+            <div class="summary-value">${totalVMs}</div>
+          </div>
+          <div class="summary-item">
+            <div class="summary-label">3-Month Actual Cost</div>
+            <div class="summary-value">${formatCurrency(totalCost3M)}</div>
+          </div>
+          <div class="summary-item">
+            <div class="summary-label">Avg Monthly Cost</div>
+            <div class="summary-value">${formatCurrency(totalMonthly)}</div>
+          </div>
+          <div class="summary-item">
+            <div class="summary-label">New VMs (< 90 days)</div>
+            <div class="summary-value">${newVMs}</div>
+          </div>
+        </div>
+      `;
+    }
+
+    function createTable(vms) {
+      let html = `
+        <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th class="sortable" data-sort="name">VM Name</th>
+              <th class="sortable" data-sort="region">Region</th>
+              <th class="sortable" data-sort="vmSize">Size</th>
+              <th class="sortable" data-sort="osType">OS</th>
+              <th class="sortable" data-sort="license_included">License Included</th>
+              <th class="sortable" data-sort="avg_cpu">Avg CPU %</th>
+              <th class="sortable" data-sort="peak_cpu">Peak CPU %</th>
+              <th class="sortable" data-sort="utilization_status">Utilization</th>
+              <th class="sortable" data-sort="total_cost_3m">3-Mo Actual</th>
+              <th class="sortable" data-sort="avg_monthly_cost">Avg/Month</th>
+              <th class="sortable" data-sort="price_payg_monthly">PAYG/Month</th>
+              <th class="sortable" data-sort="price_1yr_reserved">1-Yr Reserved</th>
+              <th class="sortable" data-sort="price_3yr_reserved">3-Yr Reserved</th>
+              <th class="sortable" data-sort="price_1yr_reserved_monthly">1-Yr Reserved/Month</th>
+              <th class="sortable" data-sort="price_3yr_reserved_monthly">3-Yr Reserved/Month</th>
+              <th class="sortable" data-sort="price_spot_monthly">Spot/Month</th>
+              <th class="sortable" data-sort="price_low_priority_monthly">Low Priority/Month</th>
+              <th>Potential Savings</th>
+            </tr>
+          </thead>
+          <tbody>
+      `;
+
+      vms.forEach(vm => {
+        const savings1yr = calculateSavings(vm.price_payg_yearly, vm.price_1yr_reserved);
+        const savings3yr = calculateSavings(vm.price_payg_yearly * 3, vm.price_3yr_reserved);
+        
+        // Format CPU utilization
+        const avgCpu = vm.avg_cpu !== null && vm.avg_cpu !== undefined ? vm.avg_cpu.toFixed(1) + '%' : 'N/A';
+        const peakCpu = vm.peak_cpu !== null && vm.peak_cpu !== undefined ? vm.peak_cpu.toFixed(1) + '%' : 'N/A';
+        
+        // Determine utilization badge class
+        let utilClass = 'util-normal';
+        if (vm.utilization_status && vm.utilization_status.includes('⚠️')) {
+          utilClass = 'util-warning';
+        } else if (vm.utilization_status && vm.utilization_status.includes('⚡')) {
+          utilClass = 'util-high';
+        }
+        
+        html += `
+          <tr>
+            <td>
+              <span class="vm-name">${vm.name}</span>
+              ${vm.is_new ? '<span class="new-badge">NEW</span>' : ''}
+            </td>
+            <td>${vm.region}</td>
+            <td>${vm.vmSize}</td>
+            <td>
+              <span class="os-badge os-${vm.osType.toLowerCase()}">${vm.osType}</span>
+            </td>
+            <td>${vm.license_included}</td>
+            <td>${avgCpu}</td>
+            <td>${peakCpu}</td>
+            <td>
+              ${vm.utilization_status ? `<span class="${utilClass}">${vm.utilization_status}</span>` : 'N/A'}
+            </td>
+            <td class="cost-cell">${formatCurrency(vm.total_cost_3m)}</td>
+            <td class="cost-cell">${formatCurrency(vm.avg_monthly_cost)}</td>
+            <td class="cost-cell">${formatCurrency(vm.price_payg_monthly)}</td>
+            <td class="cost-cell">${formatCurrency(vm.price_1yr_reserved)}</td>
+            <td class="cost-cell">${formatCurrency(vm.price_3yr_reserved)}</td>
+            <td class="cost-cell">${formatCurrency(vm.price_1yr_reserved_monthly)}</td>
+            <td class="cost-cell">${formatCurrency(vm.price_3yr_reserved_monthly)}</td>
+            <td class="cost-cell">${formatCurrency(vm.price_spot_monthly)}</td>
+            <td class="cost-cell">${formatCurrency(vm.price_low_priority_monthly)}</td>
+            <td>
+              ${savings1yr ? `<span class="savings">1yr: ${savings1yr}% off</span><br>` : ''}
+              ${savings3yr ? `<span class="savings">3yr: ${savings3yr}% off</span>` : ''}
+              ${!savings1yr && !savings3yr ? 'N/A' : ''}
+            </td>
+          </tr>
+        `;
+      });
+
+      html += `
+          </tbody>
+        </table>
+        </div>
+      `;
+
+      return html;
+    }
+
+    let currentSort = { column: null, ascending: true };
+
+    function sortTable(vms, column) {
+      const sorted = [...vms];
+      
+      sorted.sort((a, b) => {
+        let valA = a[column];
+        let valB = b[column];
+        
+        if (typeof valA === 'number' && typeof valB === 'number') {
+          return currentSort.ascending ? valA - valB : valB - valA;
+        }
+        
+        valA = String(valA || '').toLowerCase();
+        valB = String(valB || '').toLowerCase();
+        
+        if (valA < valB) return currentSort.ascending ? -1 : 1;
+        if (valA > valB) return currentSort.ascending ? 1 : -1;
+        return 0;
+      });
+      
+      return sorted;
+    }
+
+    function displayData(data) {
+      const content = document.getElementById('content');
+      const subscriptionIds = Object.keys(data);
+      
+      if (subscriptionIds.length === 0) {
+        content.innerHTML = '<div style="color: red;">No data found.</div>';
+        return;
+      }
+
+      let allHTML = '';
+      
+      subscriptionIds.forEach(subId => {
+        const vms = data[subId];
+        
+        allHTML += `
+          <div class="subscription-section">
+            <div class="subscription-id">Subscription: ${subId}</div>
+            ${createSummary(vms)}
+            ${createTable(vms)}
+          </div>
+        `;
+      });
+      
+      allHTML += '<div class="generated-date">Generated: 2025-12-18 15:03:25</div>';
+      content.innerHTML = allHTML;
+      
+      document.querySelectorAll('th.sortable').forEach(th => {
+        th.addEventListener('click', () => {
+          const column = th.dataset.sort;
+          
+          if (currentSort.column === column) {
+            currentSort.ascending = !currentSort.ascending;
+          } else {
+            currentSort.column = column;
+            currentSort.ascending = true;
+          }
+          
+          subscriptionIds.forEach(subId => {
+            const sortedVMs = sortTable(data[subId], column);
+            data[subId] = sortedVMs;
+          });
+          
+          displayData(data);
+        });
+      });
+    }
+
+    window.addEventListener('DOMContentLoaded', () => {
+      displayData(jsonData);
+    });
+  </script>
+</body>
+</html>

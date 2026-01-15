@@ -22,7 +22,11 @@ def initialize_azure_credentials():
     except Exception as e:
         print(f"Error: Failed to authenticate with Azure")
         print(f"Details: {e}")
-        print("\nPlease ensure you are logged in via 'az login' or have valid credentials configured")
+        print("\nPlease ensure you have valid Azure credentials configured:")
+        print("  - Run 'az login' (Azure CLI)")
+        print("  - Set environment variables (AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_CLIENT_SECRET)")
+        print("  - Use managed identity (if running on Azure)")
+        print("  - Or configure other DefaultAzureCredential methods")
         sys.exit(1)
 
 
@@ -87,13 +91,17 @@ def fetch_all_resources(subscription_id, headers):
             location = vm.get("location", "N/A")
             vm_size = vm.get("properties", {}).get("hardwareProfile", {}).get("vmSize", "N/A")
             os_type = vm.get("properties", {}).get("storageProfile", {}).get("osDisk", {}).get("osType", "N/A")
+            ahb_status = vm.get("properties", {}).get("licenseType", None)
+            time_created = vm.get("properties", {}).get("timeCreated", None)
             
             formatted_results.append({
                 "id": vm.get("id", ""),
                 "name": vm.get("name", "Unknown"),
                 "location": location,
                 "vmSize": vm_size,
-                "osType": os_type
+                "osType": os_type,
+                "ahbStatus": ahb_status,
+                "timeCreated": time_created
             })
             
             if location not in regions and location != "N/A":
@@ -216,8 +224,7 @@ def fetch_cost_by_resource(subscription_id, headers):
             "active_days": active_days,
             "avg_monthly_cost": avg_monthly,
             "one_year_est": one_year_est,
-            "three_year_est": three_year_est,
-            "is_new": is_new
+            "three_year_est": three_year_est
         }
     
     print(f"Retrieved cost data for {len(results)} resources")
@@ -315,12 +322,13 @@ def fetch_vm_utilization(subscription_id, resources, headers):
             }
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 429:
-                print(f"  Warning: Rate limited, skipping remaining VMs")
-                break
+                print(f"  Warning: Rate limited on VM {vm_name}, continuing with remaining VMs after brief pause")
+                import time
+                time.sleep(2)
             utilization_data[vm_name.lower()] = {
                 "avg_cpu": None,
                 "peak_cpu": None,
-                "recommendation": "Error"
+                "recommendation": "Error" if e.response.status_code != 429 else "Rate limited"
             }
         except Exception as e:
             utilization_data[vm_name.lower()] = {
@@ -346,7 +354,20 @@ def join_data(resources, cost_info, pricing_data, utilization_data=None):
             "three_year_est": 0.0,
             "is_new": True
         })
-        
+
+        date_created_str = r.get("timeCreated")
+        is_new = False
+        if date_created_str:
+            try:
+                vm_created = datetime.fromisoformat(date_created_str.replace('Z', '+00:00'))
+                today = datetime.now(timezone.utc)
+                ninety_days_ago = today - timedelta(days=90)
+                is_new = vm_created >= ninety_days_ago
+            except (ValueError, AttributeError):
+                is_new = False
+
+
+        license_status = "Yes" if not r.get("ahbStatus") and r["osType"] == "Windows" else "No"
         temp_dict = {
             "name": r["name"],
             "region": r["location"],
@@ -356,10 +377,22 @@ def join_data(resources, cost_info, pricing_data, utilization_data=None):
             "avg_monthly_cost": round(c["avg_monthly_cost"], 2),
             "one_year_est": round(c["one_year_est"], 2),
             "three_year_est": round(c["three_year_est"], 2),
-            "is_new": c["is_new"],
+            "is_new": is_new,
             "avg_cpu": None,
             "peak_cpu": None,
-            "utilization_status": "N/A"
+            "utilization_status": "N/A",
+            "license_included": license_status,
+            "price_payg_hourly": "N/A",
+            "price_payg_monthly": "N/A",
+            "price_payg_yearly": "N/A",
+            "price_1yr_reserved": "N/A",
+            "price_3yr_reserved": "N/A",
+            "price_1yr_reserved_monthly": "N/A",
+            "price_3yr_reserved_monthly": "N/A",
+            "price_spot_hourly": "N/A",
+            "price_spot_monthly": "N/A",
+            "price_low_priority_hourly": "N/A",
+            "price_low_priority_monthly": "N/A",
         }
         
         if utilization_data:
@@ -372,21 +405,23 @@ def join_data(resources, cost_info, pricing_data, utilization_data=None):
         pricing_by_location = pricing_data.get(r["location"], {})
         pricing_by_sku = pricing_by_location.get(r["vmSize"], {})
         
-        linux_series = None
-        windows_series = None
+        without_windows_license = None
+        with_windows_license = None
         
         for product_name, sku_data in pricing_by_sku.items():
-            if "Windows" not in product_name and linux_series is None:
-                linux_series = (product_name, sku_data)
-            elif "Windows" in product_name and windows_series is None:
-                windows_series = (product_name, sku_data)
+            if "Windows" not in product_name and without_windows_license is None:
+                without_windows_license = (product_name, sku_data)
+            elif "Windows" in product_name and with_windows_license is None:
+                with_windows_license = (product_name, sku_data)
         
-        if r["osType"] == "Linux" and linux_series:
-            selected_series = linux_series
-        elif r["osType"] == "Windows" and windows_series:
-            selected_series = windows_series
+        if r["osType"] == "Linux" and without_windows_license:
+            selected_series = without_windows_license
+        elif r["osType"] == "Windows" and r["ahbStatus"] == "Windows_Server":
+            selected_series = without_windows_license
+        elif r["osType"] == "Windows" and with_windows_license:
+            selected_series = with_windows_license
         else:
-            selected_series = linux_series or windows_series
+            selected_series = without_windows_license or with_windows_license
         
         if selected_series:
             product_name, sku_data = selected_series
@@ -398,6 +433,8 @@ def join_data(resources, cost_info, pricing_data, utilization_data=None):
                     temp_dict["price_payg_yearly"] = prices.get("payg1Year", "N/A")
                     temp_dict["price_1yr_reserved"] = prices.get("1year", "N/A")
                     temp_dict["price_3yr_reserved"] = prices.get("3year", "N/A")
+                    temp_dict["price_1yr_reserved_monthly"] = f"{float(prices.get('1year', 0)) / 12:.2f}" if prices.get('1year') else "N/A"
+                    temp_dict["price_3yr_reserved_monthly"] = f"{float(prices.get('3year', 0)) / 36:.2f}" if prices.get('3year') else "N/A"
                     break
             
             for sku_name, prices in sku_data.items():
@@ -669,15 +706,17 @@ def generate_html_report(data):
               <th class="sortable" data-sort="region">Region</th>
               <th class="sortable" data-sort="vmSize">Size</th>
               <th class="sortable" data-sort="osType">OS</th>
+              <th class="sortable" data-sort="license_included">PAYG License</th>
               <th class="sortable" data-sort="avg_cpu">Avg CPU %</th>
               <th class="sortable" data-sort="peak_cpu">Peak CPU %</th>
               <th class="sortable" data-sort="utilization_status">Utilization</th>
               <th class="sortable" data-sort="total_cost_3m">3-Mo Actual</th>
               <th class="sortable" data-sort="avg_monthly_cost">Avg/Month</th>
               <th class="sortable" data-sort="price_payg_monthly">PAYG/Month</th>
-              <th class="sortable" data-sort="price_payg_yearly">PAYG/Year</th>
               <th class="sortable" data-sort="price_1yr_reserved">1-Yr Reserved</th>
               <th class="sortable" data-sort="price_3yr_reserved">3-Yr Reserved</th>
+              <th class="sortable" data-sort="price_1yr_reserved_monthly">1-Yr Reserved/Month</th>
+              <th class="sortable" data-sort="price_3yr_reserved_monthly">3-Yr Reserved/Month</th>
               <th class="sortable" data-sort="price_spot_monthly">Spot/Month</th>
               <th class="sortable" data-sort="price_low_priority_monthly">Low Priority/Month</th>
               <th>Potential Savings</th>
@@ -688,7 +727,7 @@ def generate_html_report(data):
 
       vms.forEach(vm => {
         const savings1yr = calculateSavings(vm.price_payg_yearly, vm.price_1yr_reserved);
-        const savings3yr = calculateSavings(vm.price_payg_yearly, vm.price_3yr_reserved);
+        const savings3yr = calculateSavings(vm.price_payg_yearly * 3, vm.price_3yr_reserved);
         
         // Format CPU utilization
         const avgCpu = vm.avg_cpu !== null && vm.avg_cpu !== undefined ? vm.avg_cpu.toFixed(1) + '%' : 'N/A';
@@ -713,6 +752,7 @@ def generate_html_report(data):
             <td>
               <span class="os-badge os-${vm.osType.toLowerCase()}">${vm.osType}</span>
             </td>
+            <td>${vm.license_included}</td>
             <td>${avgCpu}</td>
             <td>${peakCpu}</td>
             <td>
@@ -721,9 +761,10 @@ def generate_html_report(data):
             <td class="cost-cell">${formatCurrency(vm.total_cost_3m)}</td>
             <td class="cost-cell">${formatCurrency(vm.avg_monthly_cost)}</td>
             <td class="cost-cell">${formatCurrency(vm.price_payg_monthly)}</td>
-            <td class="cost-cell">${formatCurrency(vm.price_payg_yearly)}</td>
             <td class="cost-cell">${formatCurrency(vm.price_1yr_reserved)}</td>
             <td class="cost-cell">${formatCurrency(vm.price_3yr_reserved)}</td>
+            <td class="cost-cell">${formatCurrency(vm.price_1yr_reserved_monthly)}</td>
+            <td class="cost-cell">${formatCurrency(vm.price_3yr_reserved_monthly)}</td>
             <td class="cost-cell">${formatCurrency(vm.price_spot_monthly)}</td>
             <td class="cost-cell">${formatCurrency(vm.price_low_priority_monthly)}</td>
             <td>
