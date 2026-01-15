@@ -268,6 +268,7 @@ def fetch_vm_utilization(subscription_id, resources, headers):
             
             metrics = data.get("value", [])
             if not metrics:
+                print(f"    No metrics available for {vm_name}")
                 utilization_data[vm_name.lower()] = {
                     "avg_cpu": None,
                     "peak_cpu": None,
@@ -405,27 +406,33 @@ def join_data(resources, cost_info, pricing_data, utilization_data=None):
         pricing_by_location = pricing_data.get(r["location"], {})
         pricing_by_sku = pricing_by_location.get(r["vmSize"], {})
         
-        without_windows_license = None
-        with_windows_license = None
+        # Separate base (Linux/compute-only) from Windows pricing
+        base_pricing = None
+        windows_pricing = None
         
         for product_name, sku_data in pricing_by_sku.items():
-            if "Windows" not in product_name and without_windows_license is None:
-                without_windows_license = (product_name, sku_data)
-            elif "Windows" in product_name and with_windows_license is None:
-                with_windows_license = (product_name, sku_data)
+            if "Windows" not in product_name and base_pricing is None:
+                base_pricing = (product_name, sku_data)
+            elif "Windows" in product_name and windows_pricing is None:
+                windows_pricing = (product_name, sku_data)
         
-        if r["osType"] == "Linux" and without_windows_license:
-            selected_series = without_windows_license
+        # Select appropriate pricing based on VM OS
+        if r["osType"] == "Linux" and base_pricing:
+            selected_series = base_pricing
         elif r["osType"] == "Windows" and r["ahbStatus"] == "Windows_Server":
-            selected_series = without_windows_license
-        elif r["osType"] == "Windows" and with_windows_license:
-            selected_series = with_windows_license
+            # Windows with AHB uses base pricing (no Windows license)
+            selected_series = base_pricing
+        elif r["osType"] == "Windows" and windows_pricing:
+            # Windows without AHB uses Windows pricing
+            selected_series = windows_pricing
         else:
-            selected_series = without_windows_license or with_windows_license
+            # Fallback
+            selected_series = base_pricing or windows_pricing
         
         if selected_series:
             product_name, sku_data = selected_series
             
+            # Extract standard pricing
             for sku_name, prices in sku_data.items():
                 if "Spot" not in sku_name and "Low Priority" not in sku_name:
                     temp_dict["price_payg_hourly"] = prices.get("payg", "N/A")
@@ -433,9 +440,60 @@ def join_data(resources, cost_info, pricing_data, utilization_data=None):
                     temp_dict["price_payg_yearly"] = prices.get("payg1Year", "N/A")
                     temp_dict["price_1yr_reserved"] = prices.get("1year", "N/A")
                     temp_dict["price_3yr_reserved"] = prices.get("3year", "N/A")
-                    temp_dict["price_1yr_reserved_monthly"] = f"{float(prices.get('1year', 0)) / 12:.2f}" if prices.get('1year') else "N/A"
-                    temp_dict["price_3yr_reserved_monthly"] = f"{float(prices.get('3year', 0)) / 36:.2f}" if prices.get('3year') else "N/A"
+                    
+                    # Calculate monthly reservation prices
+                    if prices.get('1year'):
+                        temp_dict["price_1yr_reserved_monthly"] = f"{float(prices.get('1year', 0)) / 12:.2f}"
+                    if prices.get('3year'):
+                        temp_dict["price_3yr_reserved_monthly"] = f"{float(prices.get('3year', 0)) / 36:.2f}"
                     break
+            
+            # For Windows VMs without AHB, calculate license cost and add to reservation prices
+            if r["osType"] == "Windows" and r["ahbStatus"] != "Windows_Server" and windows_pricing and base_pricing:
+                try:
+                    # Get Windows and base pricing data
+                    windows_sku_data = windows_pricing[1]
+                    base_sku_data = base_pricing[1]
+                    
+                    windows_prices = None
+                    base_prices = None
+                    
+                    for sku_name, prices in windows_sku_data.items():
+                        if "Spot" not in sku_name and "Low Priority" not in sku_name:
+                            windows_prices = prices
+                            break
+                    
+                    for sku_name, prices in base_sku_data.items():
+                        if "Spot" not in sku_name and "Low Priority" not in sku_name:
+                            base_prices = prices
+                            break
+                    
+                    # Calculate Windows license cost
+                    if windows_prices and base_prices:
+                        windows_payg_monthly = windows_prices.get("payg1Month")
+                        base_payg_monthly = base_prices.get("payg1Month")
+                        
+                        if windows_payg_monthly and base_payg_monthly:
+                            license_cost_monthly = float(windows_payg_monthly) - float(base_payg_monthly)
+                            
+                            # Add license cost to base reservation prices
+                            if base_prices.get("1year"):
+                                base_1yr_total = float(base_prices.get("1year"))
+                                license_cost_1yr = license_cost_monthly * 12
+                                windows_1yr_total = base_1yr_total + license_cost_1yr
+                                temp_dict["price_1yr_reserved"] = f"{windows_1yr_total:.2f}"
+                                temp_dict["price_1yr_reserved_monthly"] = f"{windows_1yr_total / 12:.2f}"
+                            
+                            if base_prices.get("3year"):
+                                base_3yr_total = float(base_prices.get("3year"))
+                                license_cost_3yr = license_cost_monthly * 36
+                                windows_3yr_total = base_3yr_total + license_cost_3yr
+                                temp_dict["price_3yr_reserved"] = f"{windows_3yr_total:.2f}"
+                                temp_dict["price_3yr_reserved_monthly"] = f"{windows_3yr_total / 36:.2f}"
+                
+                except (ValueError, TypeError, KeyError) as e:
+                    # If calculation fails, keep the values already set
+                    pass
             
             for sku_name, prices in sku_data.items():
                 if "Spot" in sku_name:
@@ -461,6 +519,8 @@ def get_pricing_list(regions, skus):
     
     print(f"Fetching pricing for {len(regions)} regions and {len(skus)} VM sizes...")
     pricing_list = price_sheet.get_pricing(regions, skus)
+    # with open("pricing_data.json", "w") as f:
+    #     json.dump(pricing_list, f, indent=4)
     
     if not pricing_list:
         print("Warning: No pricing data returned")
@@ -483,6 +543,7 @@ def generate_html_report(data):
 <head>
   <meta charset="UTF-8">
   <title>Azure VM Cost Comparison</title>
+  <link rel="icon" type="image/png" href="Logo 1 dark background.png">
   <style>
     body { 
       font-family: 'Segoe UI', Arial, sans-serif; 
@@ -498,9 +559,19 @@ def generate_html_report(data):
       border-radius: 8px;
       box-shadow: 0 2px 8px rgba(0,0,0,0.1);
     }
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      margin-bottom: 20px;
+    }
+    .logo {
+      height: 60px;
+      width: auto;
+    }
     h1 {
       color: #0078d4;
-      margin-bottom: 10px;
+      margin: 0;
       font-size: 28px;
     }
     .subscription-id {
@@ -643,7 +714,10 @@ def generate_html_report(data):
 </head>
 <body>
   <div class="container">
-    <h1>Azure VM Cost Comparison</h1>
+    <div class="header">
+      <img src="Logo 1 dark background.png" alt="Logo" class="logo">
+      <h1>Azure VM Cost Comparison</h1>
+    </div>
     <div id="content">
       <div style="text-align: center; padding: 40px;">Loading data...</div>
     </div>
@@ -857,6 +931,9 @@ def generate_html_report(data):
     }
 
     window.addEventListener('DOMContentLoaded', () => {
+      // Show pricing verification alert
+      alert('⚠️ IMPORTANT: Always verify pricing accuracy\\n\\nThe pricing data in this report is fetched from public Azure APIs and may not reflect:\\n\\n• Your specific enterprise agreements or discounts\\n• Regional pricing variations or special offers\\n• Recently announced price changes\\n• Custom contract terms\\n\\nPlease verify all pricing with the Azure Pricing Calculator or Azure Portal before making decisions.');
+      
       displayData(jsonData);
     });
   </script>
@@ -932,8 +1009,8 @@ def main():
     
     try:
         generate_html_report(sub_data)
-        with open('output.json', 'w') as f:
-            json.dump(sub_data, f, indent=4)
+        # with open('output.json', 'w') as f:
+        #     json.dump(sub_data, f, indent=4)
         print("\nSuccess! Open 'vm_cost_report.html' in your browser to view results")
     except Exception as e:
         print(f"Error generating final report: {e}")
